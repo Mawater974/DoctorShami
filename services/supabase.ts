@@ -116,6 +116,9 @@ export const dbService = {
         city_id: data.city_id,
         location_en: data.location_en,
         location_ar: data.location_ar,
+        neighborhood: data.neighborhood, // New Field
+        latitude: data.latitude,         // New Field
+        longitude: data.longitude        // New Field
     };
 
     if (data.type === EntityType.CLINIC) {
@@ -124,9 +127,10 @@ export const dbService = {
         payload.services = data.services || [];
         payload.description_en = data.description_en;
         payload.description_ar = data.description_ar;
+        payload.opening_hours = data.opening_hours || {};
+        payload.category_ids = data.category_ids || [];
     } else {
          // Pharmacy mapping based on strict SQL schema provided
-         // Note: Pharmacy table in SQL is simpler than Clinic
     }
 
     const { data: result, error } = await supabase
@@ -154,12 +158,19 @@ export const dbService = {
         location_ar: updates.location_ar,
       };
 
+      // Add conditional updates if they exist (to support older schema)
+      if (updates.neighborhood !== undefined) payload.neighborhood = updates.neighborhood;
+      if (updates.latitude !== undefined) payload.latitude = updates.latitude;
+      if (updates.longitude !== undefined) payload.longitude = updates.longitude;
+
       if (type === EntityType.CLINIC) {
           payload.description_en = updates.description_en;
           payload.description_ar = updates.description_ar;
           payload.contact_phone = updates.phone;
           payload.logo_url = updates.image;
           payload.services = updates.services;
+          payload.opening_hours = updates.opening_hours;
+          payload.category_ids = updates.category_ids;
       }
 
       const { data, error } = await supabase
@@ -176,7 +187,7 @@ export const dbService = {
       type: EntityType | 'ALL', 
       query: string = '', 
       lang: 'en' | 'ar' = 'en',
-      filters: { cityId?: number; specialtyId?: number } = {}
+      filters: { cityId?: number; specialtyId?: number; verified?: boolean } = {}
   ): Promise<Facility[]> {
     let facilities: Facility[] = [];
 
@@ -192,6 +203,9 @@ export const dbService = {
         address: lang === 'ar' ? item.location_ar : item.location_en,
         location_en: item.location_en,
         location_ar: item.location_ar,
+        neighborhood: item.neighborhood,
+        latitude: item.latitude,
+        longitude: item.longitude,
         image: item.logo_url,
         phone: item.contact_phone,
         description: lang === 'ar' ? item.description_ar : item.description_en,
@@ -199,6 +213,8 @@ export const dbService = {
         description_ar: item.description_ar,
         is_verified: item.is_verified,
         services: item.services,
+        category_ids: item.category_ids || [],
+        opening_hours: item.opening_hours
     });
 
     const mapPharmacy = (item: any): Facility => ({
@@ -213,6 +229,9 @@ export const dbService = {
         address: lang === 'ar' ? item.location_ar : item.location_en,
         location_en: item.location_en,
         location_ar: item.location_ar,
+        neighborhood: item.neighborhood,
+        latitude: item.latitude,
+        longitude: item.longitude,
         image: 'https://images.unsplash.com/photo-1587854692152-cbe660dbde88?auto=format&fit=crop&q=80&w=400', // Default placeholder as pharmacy table has no image col
     });
 
@@ -230,13 +249,15 @@ export const dbService = {
             // Check if specialtyId exists in category_ids array
             q = q.contains('category_ids', [filters.specialtyId]);
         }
+        if (filters.verified) {
+            q = q.eq('is_verified', true);
+        }
 
         const { data } = await q;
         if (data) facilities = [...facilities, ...data.map(mapClinic)];
     }
     
     // Fetch Pharmacies
-    // Note: Pharmacies usually don't have specialty filters, so we skip if specialtyId is set
     if ((type === 'ALL' || type === EntityType.PHARMACY) && !filters.specialtyId) {
         let q = supabase.from('pharmacies').select('*, cities(*)');
         
@@ -275,9 +296,12 @@ export const dbService = {
             name_ar: clinic.name_ar,
             location_en: clinic.location_en,
             location_ar: clinic.location_ar,
-            description_en: clinic.description_en,
-            description_ar: clinic.description_ar,
+            neighborhood: clinic.neighborhood,
+            latitude: clinic.latitude,
+            longitude: clinic.longitude,
             city_id: clinic.city_id,
+            opening_hours: clinic.opening_hours,
+            category_ids: clinic.category_ids
         } as Facility;
     }
 
@@ -296,6 +320,9 @@ export const dbService = {
             name_ar: pharmacy.name_ar,
             location_en: pharmacy.location_en,
             location_ar: pharmacy.location_ar,
+            neighborhood: pharmacy.neighborhood,
+            latitude: pharmacy.latitude,
+            longitude: pharmacy.longitude,
             city_id: pharmacy.city_id,
         } as Facility;
     }
@@ -310,7 +337,9 @@ export const dbService = {
         type: EntityType.CLINIC, 
         image: clinic.logo_url,
         phone: clinic.contact_phone,
-        address: clinic.location_en // Default fallbacks
+        address: clinic.location_en, // Default fallbacks
+        opening_hours: clinic.opening_hours,
+        category_ids: clinic.category_ids
     } as Facility;
     
     const { data: pharmacy } = await supabase.from('pharmacies').select('*').eq('owner_id', ownerId).single();
@@ -323,15 +352,108 @@ export const dbService = {
     return null;
   },
 
-  // --- Booking Related ---
+  // --- Booking Related (Doctor Management) ---
 
   async getDoctorsByClinicId(clinicId: string): Promise<Doctor[]> {
-    const { data } = await supabase.from('doctors').select('*').eq('clinic_id', clinicId);
-    // Safely map data to include specialty_ids even if column missing or null
-    return (data || []).map((d: any) => ({
+    // Only use junction table now
+    const { data: junctionDoctors } = await supabase
+        .from('clinic_doctors')
+        .select('doctor:doctors(*)')
+        .eq('clinic_id', clinicId);
+    
+    const doctors = junctionDoctors?.map((d: any) => d.doctor) || [];
+
+    // Remove duplicates based on ID
+    const uniqueDoctors = Array.from(new Map(doctors.map(d => [d.id, d])).values());
+
+    return uniqueDoctors.map((d: any) => ({
         ...d,
         specialty_ids: d.specialty_ids || (d.specialty_id ? [d.specialty_id] : [])
     }));
+  },
+
+  async getProviderDoctors(providerId: string): Promise<Doctor[]> {
+      // 1. Get Provider's Clinics
+      const { data: clinics } = await supabase.from('clinics').select('id, name_en, name_ar').eq('owner_id', providerId);
+      if (!clinics || clinics.length === 0) return [];
+      const clinicIds = clinics.map(c => c.id);
+
+      // 2. Get Links
+      const { data: links } = await supabase
+          .from('clinic_doctors')
+          .select('clinic_id, doctor_id')
+          .in('clinic_id', clinicIds);
+      
+      const linkedDoctorIds = links?.map(l => l.doctor_id) || [];
+      
+      if (linkedDoctorIds.length === 0) return [];
+      
+      // 3. Get Doctors (pure lookup by ID)
+      const { data: doctors } = await supabase.from('doctors').select('*').in('id', linkedDoctorIds);
+      
+      if (!doctors) return [];
+
+      // 4. Map Clinics to Doctors
+      return doctors.map((d: any) => {
+          // Find all clinics this doctor belongs to (from the provider's list)
+          const docLinks = links?.filter(l => l.doctor_id === d.id).map(l => l.clinic_id) || [];
+          
+          const doctorClinics = clinics.filter(c => docLinks.includes(c.id));
+          
+          return {
+              ...d,
+              clinics: doctorClinics,
+              specialty_ids: d.specialty_ids || (d.specialty_id ? [d.specialty_id] : [])
+          };
+      });
+  },
+
+  async getAllDoctors(): Promise<Doctor[]> {
+    const { data } = await supabase
+        .from('doctors')
+        .select('*')
+        .limit(100); // Limit to avoid performance issues in dropdown
+    
+    return (data || []).map((d: any) => ({
+        ...d,
+        specialty_ids: d.specialty_ids || []
+    }));
+  },
+
+  async searchDoctors(query: string): Promise<Doctor[]> {
+    if (!query) return this.getAllDoctors(); // Reuse get all if query empty
+    
+    const { data } = await supabase
+        .from('doctors')
+        .select('*')
+        .or(`name_en.ilike.%${query}%,name_ar.ilike.%${query}%`)
+        .limit(20);
+        
+    return (data || []).map((d: any) => ({
+        ...d,
+        specialty_ids: d.specialty_ids || []
+    }));
+  },
+
+  async linkDoctorToClinic(doctorId: string, clinicId: string) {
+    const { error } = await supabase
+        .from('clinic_doctors')
+        .upsert(
+            { clinic_id: clinicId, doctor_id: doctorId },
+            { onConflict: 'clinic_id, doctor_id', ignoreDuplicates: true }
+        );
+        
+    if (error) throw error;
+  },
+
+  // Helper to unlink for editing scenarios if needed (optional)
+  async unlinkDoctorFromClinic(doctorId: string, clinicId: string) {
+      const { error } = await supabase
+          .from('clinic_doctors')
+          .delete()
+          .eq('clinic_id', clinicId)
+          .eq('doctor_id', doctorId);
+      if (error) throw error;
   },
 
   async getDoctorSchedules(doctorId: string): Promise<DoctorSchedule[]> {
@@ -340,9 +462,6 @@ export const dbService = {
   },
 
   async getBookingsByDoctorDate(doctorId: string, date: string): Promise<Partial<Booking>[]> {
-    // date string YYYY-MM-DD
-    // Filter bookings that start on this day (ignoring time for broad fetch, filtering in UI/Service if needed)
-    // Supabase date filtering on timestamp
     const start = `${date}T00:00:00`;
     const end = `${date}T23:59:59`;
     
@@ -389,106 +508,81 @@ export const dbService = {
 };
 
 // --- Messaging Service ---
+
 export const messagingService = {
-  // Get all conversations for current user
-  async getConversations(currentUserId: string): Promise<Conversation[]> {
-    const { data: conversations, error } = await supabase
+  async startConversation(userId: string, otherUserId: string) {
+    const { data: existing } = await supabase
+      .from('conversations')
+      .select('id')
+      .or(`and(participant_1.eq.${userId},participant_2.eq.${otherUserId}),and(participant_1.eq.${otherUserId},participant_2.eq.${userId})`)
+      .single();
+
+    if (existing) return existing.id;
+
+    const { data, error } = await supabase
+      .from('conversations')
+      .insert({
+        participant_1: userId,
+        participant_2: otherUserId,
+        last_message_at: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+
+    if (error) throw error;
+    return data.id;
+  },
+
+  async getConversations(userId: string): Promise<Conversation[]> {
+    const { data: convs, error } = await supabase
         .from('conversations')
         .select('*')
-        .or(`participant_1.eq.${currentUserId},participant_2.eq.${currentUserId}`)
+        .or(`participant_1.eq.${userId},participant_2.eq.${userId}`)
         .order('last_message_at', { ascending: false });
 
     if (error) throw error;
-    if (!conversations) return [];
+    if (!convs) return [];
 
-    // Map to include other user details
-    // We need to fetch profiles for the "other" person
-    const enrichedConversations = await Promise.all(conversations.map(async (conv: any) => {
-        const otherId = conv.participant_1 === currentUserId ? conv.participant_2 : conv.participant_1;
-        const { data: otherProfile } = await supabase
-            .from('profiles')
-            .select('id, full_name, avatar_url')
-            .eq('id', otherId)
-            .single();
-
-        // Get last message text for preview
-        const { data: lastMsg } = await supabase
-            .from('messages')
-            .select('content')
-            .eq('conversation_id', conv.id)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .single();
-
+    const otherIds = [...new Set(convs.map((c: any) => c.participant_1 === userId ? c.participant_2 : c.participant_1))];
+    
+    const { data: profiles } = await supabase.from('profiles').select('id, full_name, avatar_url').in('id', otherIds);
+    // Use Map<string, any> to avoid 'unknown' type inference on map values
+    const pMap = new Map<string, any>(profiles?.map((p: any) => [p.id, p]) || []);
+    
+    return convs.map((c: any) => {
+        const otherId = c.participant_1 === userId ? c.participant_2 : c.participant_1;
+        const p = pMap.get(otherId);
         return {
-            ...conv,
-            other_user: otherProfile,
-            last_message_preview: lastMsg?.content
+            id: c.id,
+            participant_1: c.participant_1,
+            participant_2: c.participant_2,
+            last_message_at: c.last_message_at,
+            other_user: p ? { id: p.id, full_name: p.full_name, avatar_url: p.avatar_url } : undefined
         };
-    }));
-
-    return enrichedConversations;
+    });
   },
 
-  // Get messages for a conversation
   async getMessages(conversationId: string): Promise<Message[]> {
     const { data, error } = await supabase
         .from('messages')
         .select('*')
         .eq('conversation_id', conversationId)
         .order('created_at', { ascending: true });
-
-    if (error) throw error;
-    return data as Message[] || [];
-  },
-
-  // Send a message
-  async sendMessage(conversationId: string, senderId: string, content: string) {
-    const { data, error } = await supabase
-        .from('messages')
-        .insert({
-            conversation_id: conversationId,
-            sender_id: senderId,
-            content
-        })
-        .select()
-        .single();
     
     if (error) throw error;
-
-    // Update conversation last_message_at
-    await supabase
-        .from('conversations')
-        .update({ last_message_at: new Date().toISOString() })
-        .eq('id', conversationId);
-
-    return data;
+    return data || [];
   },
 
-  // Start or get existing conversation
-  async startConversation(userId: string, otherUserId: string): Promise<string> {
-      if (userId === otherUserId) throw new Error("Cannot chat with yourself");
+  async sendMessage(conversationId: string, senderId: string, content: string) {
+      const { error } = await supabase
+          .from('messages')
+          .insert({ conversation_id: conversationId, sender_id: senderId, content });
       
-      // Check if exists (p1=A & p2=B) OR (p1=B & p2=A)
-      const { data: existing } = await supabase
-        .from('conversations')
-        .select('id')
-        .or(`and(participant_1.eq.${userId},participant_2.eq.${otherUserId}),and(participant_1.eq.${otherUserId},participant_2.eq.${userId})`)
-        .single();
-
-      if (existing) return existing.id;
-
-      // Create new
-      const { data: newConv, error } = await supabase
-        .from('conversations')
-        .insert({
-            participant_1: userId,
-            participant_2: otherUserId
-        })
-        .select()
-        .single();
-
       if (error) throw error;
-      return newConv.id;
+
+      await supabase
+          .from('conversations')
+          .update({ last_message_at: new Date().toISOString() })
+          .eq('id', conversationId);
   }
 };

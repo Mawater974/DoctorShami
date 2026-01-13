@@ -30,7 +30,7 @@ export const Appointments: React.FC = () => {
   useEffect(() => { fetchBookings(); }, [user]);
 
   const handleCancel = async (bookingId: string) => {
-      if (!confirm('Are you sure you want to cancel this appointment?')) return;
+      if (!confirm(t('appt.cancelConfirm'))) return;
       await supabase.from('bookings').update({ status: 'CANCELLED' }).eq('id', bookingId);
       fetchBookings();
   };
@@ -47,12 +47,10 @@ export const Appointments: React.FC = () => {
                     <Calendar className="w-8 h-8 text-gray-400" />
                 </div>
                 <h3 className="text-xl font-medium text-gray-900 dark:text-gray-100 mb-2">
-                    {lang === 'en' ? 'No appointments yet' : 'لا توجد مواعيد بعد'}
+                    {t('appt.empty')}
                 </h3>
                 <p className="text-gray-500 max-w-sm">
-                    {lang === 'en' 
-                        ? 'You haven\'t booked any appointments. Find a doctor or clinic to get started.' 
-                        : 'لم تقم بحجز أي مواعيد. ابحث عن طبيب أو عيادة للبدء.'}
+                    {t('appt.emptyDesc')}
                 </p>
             </div>
       ) : (
@@ -62,7 +60,7 @@ export const Appointments: React.FC = () => {
                       <div className="flex-1">
                           <div className="flex items-center gap-2 mb-2">
                              <h3 className="font-bold text-lg">
-                                 {b.clinic ? (lang === 'en' ? b.clinic.name_en : b.clinic.name_ar) : 'Clinic'}
+                                 {b.clinic ? (lang === 'en' ? b.clinic.name_en : b.clinic.name_ar) : t('table.clinic')}
                              </h3>
                              <Badge variant={b.status === 'CONFIRMED' ? 'success' : b.status === 'CANCELLED' ? 'warning' : 'info'}>
                                 {b.status}
@@ -70,7 +68,7 @@ export const Appointments: React.FC = () => {
                           </div>
                           <div className="text-gray-600 dark:text-gray-400 flex items-center gap-2 mb-1">
                               <MapPin size={16} />
-                              <span>{b.doctor ? (lang === 'en' ? `Dr. ${b.doctor.name_en}` : `د. ${b.doctor.name_ar}`) : 'General Appointment'}</span>
+                              <span>{b.doctor ? (lang === 'en' ? `Dr. ${b.doctor.name_en}` : `د. ${b.doctor.name_ar}`) : t('appt.general')}</span>
                           </div>
                           <div className="text-sm text-gray-500 flex items-center gap-4">
                               <span className="flex items-center gap-1"><Calendar size={14}/> {new Date(b.booking_date).toLocaleDateString()}</span>
@@ -80,7 +78,7 @@ export const Appointments: React.FC = () => {
                       
                       {b.status !== 'CANCELLED' && b.status !== 'COMPLETED' && (
                            <Button variant="danger" size="sm" onClick={() => handleCancel(b.id)}>
-                               {lang === 'en' ? 'Cancel' : 'إلغاء'}
+                               {t('appt.cancel')}
                            </Button>
                       )}
                   </Card>

@@ -63,7 +63,7 @@ export const AdminDashboard: React.FC = () => {
                             <div className="text-xs text-gray-400 mt-1">ID: {c.id}</div>
                     </div>
                     <div className="flex gap-2 w-full sm:w-auto">
-                        <Link to={`/directory/${c.id}`} target="_blank" className="flex-1 sm:flex-none">
+                        <Link to={`/clinic/${c.id}`} target="_blank" className="flex-1 sm:flex-none">
                             <Button size="sm" variant="outline" className="w-full flex items-center gap-1">
                                 <ExternalLink size={14} /> View
                             </Button>

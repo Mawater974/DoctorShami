@@ -72,8 +72,12 @@ export const Messages: React.FC = () => {
 
   // Scroll to bottom when messages change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (messages.length > 0) {
+        setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }, 100);
+    }
+  }, [messages, activeConvId]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();

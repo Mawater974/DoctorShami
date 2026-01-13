@@ -115,6 +115,7 @@ export const Auth: React.FC = () => {
             <Input 
                 label={lang === 'en' ? 'Password' : 'كلمة المرور'} 
                 type="password" 
+                placeholder="******"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required

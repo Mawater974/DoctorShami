@@ -80,8 +80,6 @@ export const analyticsService = {
       const uaData = getBrowserInfo();
 
       // 4. Determine Page Type & Entity
-      // /directory/123-abc -> type: DETAIL, entity: 123-abc
-      // /clinics -> type: LISTING
       let pageType = 'OTHER';
       let entityId = null;
 
@@ -92,9 +90,21 @@ export const analyticsService = {
           pageType = 'DETAIL';
           const parts = path.split('/');
           if (parts.length > 2) entityId = parts[2];
+      } else if (path.startsWith('/clinic/')) {
+          pageType = 'DETAIL_CLINIC';
+          const parts = path.split('/');
+          if (parts.length > 2) entityId = parts[2];
+      } else if (path.startsWith('/pharmacy/')) {
+          pageType = 'DETAIL_PHARMACY';
+          const parts = path.split('/');
+          if (parts.length > 2) entityId = parts[2];
       } else if (path.startsWith('/auth')) pageType = 'AUTH';
       else if (path.startsWith('/admin')) pageType = 'ADMIN';
       else if (path.startsWith('/provider')) pageType = 'PROVIDER';
+      else if (path.startsWith('/messages')) pageType = 'MESSAGES';
+      else if (path.startsWith('/appointments')) pageType = 'APPOINTMENTS';
+      else if (path.startsWith('/settings')) pageType = 'SETTINGS';
+      else if (path.startsWith('/register-facility')) pageType = 'REGISTER';
 
       // 5. Insert
       try {

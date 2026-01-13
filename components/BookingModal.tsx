@@ -58,15 +58,16 @@ export const BookingModal: React.FC<BookingModalProps> = ({ clinicId, clinicName
             // 1. Get Schedule for this doctor
             const schedules = await dbService.getDoctorSchedules(selectedDoctor);
             const dateObj = new Date(selectedDate);
+            
+            // New Mapping for [Sat, Sun, Mon, Tue, Wed, Thu, Fri]
             // JS getDay(): 0=Sun, 1=Mon, ..., 6=Sat
-            // We need to map this to whatever standard we used in ProviderDashboard
-            // In ProviderDashboard: weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            // index: 0=Mon ... 6=Sun
-            // JS: 0=Sun, 1=Mon...
-            // Mapping JS getDay() to our Schedule index:
-            // JS 1(Mon) -> 0
-            // JS 0(Sun) -> 6
-            const dayIndex = dateObj.getDay() === 0 ? 6 : dateObj.getDay() - 1;
+            // We need to map:
+            // Sat (6) -> 0
+            // Sun (0) -> 1
+            // Mon (1) -> 2
+            // ...
+            // Fri (5) -> 6
+            const dayIndex = (dateObj.getDay() + 1) % 7;
             
             const todaySchedule = schedules.find(s => s.day_of_week === dayIndex);
 

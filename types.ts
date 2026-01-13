@@ -38,25 +38,28 @@ export interface Facility {
   id: string;
   type: EntityType;
   owner_id: string;
-  
+
   // Display names (computed or fetched)
-  name?: string; 
+  name?: string;
   name_en: string;
   name_ar: string;
-  
+
   // Location
   city_id: number;
   city_name?: string; // For display
   location_en?: string;
   location_ar?: string;
-  
+  neighborhood?: string; // New: Neighborhood
+  latitude?: number;    // New: GPS Lat
+  longitude?: number;   // New: GPS Lng
+
   // Common
   image?: string; // mapped from logo_url in DB
   logo_url?: string; // DB field
   is_verified?: boolean;
   phone?: string; // mapped from contact_phone
   created_at?: string;
-  
+
   // Clinic specific
   services?: string[];
   category_ids?: number[]; // For edit form
@@ -64,25 +67,26 @@ export interface Facility {
   description_en?: string;
   description_ar?: string;
   contact_phone?: string;
-  
+
   // UI Helpers
   description?: string;
   address?: string; // Display address
 }
 
 // Aliases for the Dashboard code compatibility
-export type Clinic = Facility; 
+export type Clinic = Facility;
 export type Pharmacy = Facility;
 
 export interface Doctor {
   id: string;
-  clinic_id: string;
+  clinics?: { id: string; name_en: string; name_ar: string }[]; // New: List of linked clinics
   name_en: string;
   name_ar: string;
   specialty_ids: number[]; // Changed from single ID to array
   specialty_id?: number; // Deprecated, kept for safe fallback
   bio?: string;
   photo_url?: string;
+  phone?: string;
 }
 
 export interface DoctorSchedule {
@@ -132,12 +136,12 @@ export interface Conversation {
   participant_1: string;
   participant_2: string;
   last_message_at: string;
-  
+
   // Computed on frontend
   other_user?: {
-      id: string;
-      full_name: string;
-      avatar_url?: string;
+    id: string;
+    full_name: string;
+    avatar_url?: string;
   };
   last_message_preview?: string;
 }

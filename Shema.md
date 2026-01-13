@@ -1,3 +1,4 @@
+
 -- =============================================================================
 -- DOCTORSHAMI FULL DATABASE SCRIPT
 -- Copy everything below and run in Supabase SQL Editor
@@ -136,23 +137,30 @@ create policy "Providers delete own clinics" on clinics for delete using (auth.u
 -- 7. DOCTORS TABLE
 create table if not exists doctors (
     id uuid default uuid_generate_v4() primary key,
-    clinic_id uuid references clinics(id) on delete cascade not null,
+    -- clinic_id removed, using clinic_doctors table instead
     name_en text not null,
     name_ar text not null,
-    specialty_id bigint references specialties(id),
+    specialty_id bigint references specialties(id), -- Keeping for legacy
+    specialty_ids bigint[] default '{}', -- NEW COLUMN for multi-select
     bio text,
     photo_url text,
     created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- Doctors RLS
+-- Doctors RLS (Updated to allow Providers to manage doctors they link to)
 alter table doctors enable row level security;
 drop policy if exists "Doctors viewable by everyone" on doctors;
 drop policy if exists "Providers manage doctors" on doctors;
 
 create policy "Doctors viewable by everyone" on doctors for select using (true);
+
+-- Allow managing if you own the clinic linked via clinic_doctors
 create policy "Providers manage doctors" on doctors for all using (
-    exists (select 1 from clinics where id = doctors.clinic_id and owner_id = auth.uid())
+    exists (
+      select 1 from clinic_doctors cd 
+      join clinics c on cd.clinic_id = c.id 
+      where cd.doctor_id = doctors.id and c.owner_id = auth.uid()
+    )
 );
 
 
@@ -173,7 +181,12 @@ drop policy if exists "Providers manage schedules" on doctor_schedules;
 
 create policy "Schedules viewable by everyone" on doctor_schedules for select using (true);
 create policy "Providers manage schedules" on doctor_schedules for all using (
-    exists (select 1 from doctors d join clinics c on d.clinic_id = c.id where d.id = doctor_schedules.doctor_id and c.owner_id = auth.uid())
+    exists (
+        select 1 from doctors d 
+        left join clinic_doctors cd on d.id = cd.doctor_id
+        join clinics c on cd.clinic_id = c.id
+        where d.id = doctor_schedules.doctor_id and c.owner_id = auth.uid()
+    )
 );
 
 
@@ -229,3 +242,171 @@ create policy "Update bookings" on bookings for update using (
 );
 
 create index if not exists bookings_date_idx on bookings(booking_date);
+
+-- =============================================================================
+-- 11. PAGE VIEWS ANALYTICS
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS page_views (
+  id BIGSERIAL PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  page_path TEXT NOT NULL,
+  page_type TEXT,
+  entity_id TEXT,
+  ip_address TEXT,
+  real_country_name TEXT,
+  country_code TEXT,
+  city TEXT,
+  browser TEXT,
+  device_type TEXT,
+  platform TEXT,
+  referrer TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_page_views_created_at ON page_views USING BTREE (created_at);
+CREATE INDEX IF NOT EXISTS idx_page_views_session ON page_views USING BTREE (session_id);
+
+-- RLS for Analytics
+ALTER TABLE page_views ENABLE ROW LEVEL SECURITY;
+
+-- Allow anyone to insert (track stats)
+CREATE POLICY "Allow public insert to analytics" 
+ON page_views FOR INSERT 
+WITH CHECK (true);
+
+-- Allow only admins to read stats
+CREATE POLICY "Allow admins to view analytics" 
+ON page_views FOR SELECT 
+USING (
+  exists (select 1 from profiles where id = auth.uid() and role = 'ADMIN')
+);
+
+
+-- =============================================================================
+-- 12. REVIEWS TABLE
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS reviews (
+  id uuid default uuid_generate_v4() primary key,
+  entity_id uuid not null, -- Can link to clinic OR pharmacy
+  entity_type text not null, -- 'CLINIC' or 'PHARMACY'
+  user_id uuid references profiles(id) on delete cascade not null,
+  rating int not null check (rating >= 1 and rating <= 5),
+  comment text,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+-- Reviews RLS
+alter table reviews enable row level security;
+
+-- Everyone can read reviews
+create policy "Reviews viewable by everyone" 
+on reviews for select using (true);
+
+-- Authenticated users can write reviews
+create policy "Users can insert own reviews" 
+on reviews for insert with check (auth.uid() = user_id);
+
+-- Create index for faster lookups
+create index if not exists idx_reviews_entity on reviews(entity_id);
+
+
+-- =============================================================================
+-- 13. MESSAGING SYSTEM
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id uuid default uuid_generate_v4() primary key,
+  participant_1 uuid references profiles(id) not null,
+  participant_2 uuid references profiles(id) not null,
+  last_message_at timestamp with time zone default timezone('utc'::text, now()),
+  updated_at timestamp with time zone default timezone('utc'::text, now()),
+  -- Constraint to ensure unique conversation pairs (A, B) is same as (B, A) logic handled in query or dual check
+  -- For simplicity in RLS, we just ensure no duplicate rows for exact p1, p2 combo
+  unique(participant_1, participant_2)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id uuid default uuid_generate_v4() primary key,
+  conversation_id uuid references conversations(id) on delete cascade not null,
+  sender_id uuid references profiles(id) not null,
+  content text not null,
+  is_read boolean default false,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+
+-- Messaging RLS
+alter table conversations enable row level security;
+alter table messages enable row level security;
+
+-- Conversations: Users can see conversations they are part of
+create policy "Users view own conversations"
+on conversations for select
+using (auth.uid() = participant_1 or auth.uid() = participant_2);
+
+create policy "Users create conversations"
+on conversations for insert
+with check (auth.uid() = participant_1 or auth.uid() = participant_2);
+
+-- Messages: Users can see messages in their conversations
+create policy "Users view messages in own conversations"
+on messages for select
+using (
+  exists (
+    select 1 from conversations c
+    where c.id = messages.conversation_id
+    and (c.participant_1 = auth.uid() or c.participant_2 = auth.uid())
+  )
+);
+
+create policy "Users send messages"
+on messages for insert
+with check (auth.uid() = sender_id);
+
+create policy "Users update read status"
+on messages for update
+using (
+    exists (
+    select 1 from conversations c
+    where c.id = messages.conversation_id
+    and (c.participant_1 = auth.uid() or c.participant_2 = auth.uid())
+  )
+);
+
+-- =============================================================================
+-- 14. CLINIC DOCTORS (Many-to-Many) & MIGRATION
+-- =============================================================================
+
+create table if not exists clinic_doctors (
+  id uuid default uuid_generate_v4() primary key,
+  clinic_id uuid references clinics(id) on delete cascade not null,
+  doctor_id uuid references doctors(id) on delete cascade not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()),
+  unique(clinic_id, doctor_id)
+);
+
+-- Enable RLS
+alter table clinic_doctors enable row level security;
+
+-- Policies
+drop policy if exists "Public view clinic_doctors" on clinic_doctors;
+drop policy if exists "Providers manage clinic_doctors" on clinic_doctors;
+
+create policy "Public view clinic_doctors" on clinic_doctors for select using (true);
+create policy "Providers manage clinic_doctors" on clinic_doctors for all using (
+    exists (select 1 from clinics where id = clinic_doctors.clinic_id and owner_id = auth.uid())
+);
+
+-- MIGRATION: Move existing relationships
+insert into clinic_doctors (clinic_id, doctor_id)
+select clinic_id, id from doctors where clinic_id is not null
+on conflict do nothing;
+
+-- Fix specialty_ids column if missing (Safety check)
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS specialty_ids bigint[] DEFAULT '{}';
+
+-- CLEANUP: Remove old column (RUN THIS AFTER MIGRATION IS CONFIRMED)
+ALTER TABLE doctors DROP COLUMN IF EXISTS clinic_id;

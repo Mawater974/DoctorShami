@@ -13,21 +13,18 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- 2. STORAGE BUCKET & POLICIES (Fixes "Unauthorized" / "Violates RLS" errors)
--- Create bucket
+-- 2. STORAGE BUCKET & POLICIES
 insert into storage.buckets (id, name, public)
 values ('docotrshami', 'docotrshami', true)
 on conflict (id) do update set public = true;
 
--- Drop existing policies to ensure clean state
-drop policy if exists "Public Access" on storage.objects;
+drop policy if exists "Public Read Access" on storage.objects;
 drop policy if exists "Authenticated Upload" on storage.objects;
+drop policy if exists "Owner Manage" on storage.objects;
+drop policy if exists "Public Access" on storage.objects;
 drop policy if exists "Owner Delete" on storage.objects;
 drop policy if exists "Give me access" on storage.objects;
-drop policy if exists "Public Read Access" on storage.objects;
-drop policy if exists "Owner Manage" on storage.objects;
 
--- Create correct policies
 create policy "Public Read Access"
 on storage.objects for select
 using ( bucket_id = 'docotrshami' );
@@ -54,8 +51,8 @@ create table if not exists profiles (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- Profiles RLS
 alter table profiles enable row level security;
+
 drop policy if exists "Public profiles are viewable by everyone." on profiles;
 drop policy if exists "Users can insert their own profile." on profiles;
 drop policy if exists "Users can update own profile." on profiles;
@@ -112,17 +109,20 @@ create table if not exists clinics (
   category_id bigint references specialties(id)
 );
 
--- IMPORTANT: Add Missing Columns (Fixes "Could not find description_ar" error)
 alter table clinics add column if not exists description_en text;
 alter table clinics add column if not exists description_ar text;
 alter table clinics add column if not exists opening_hours jsonb default '{}'::jsonb;
 alter table clinics add column if not exists category_ids bigint[] default '{}';
 
--- Create Index for multi-category search
+-- ADD LOCATION COLUMNS
+alter table clinics add column if not exists neighborhood text;
+alter table clinics add column if not exists latitude double precision;
+alter table clinics add column if not exists longitude double precision;
+
 create index if not exists clinics_category_ids_idx on clinics using gin (category_ids);
 
--- Clinics RLS
 alter table clinics enable row level security;
+
 drop policy if exists "Clinics viewable by everyone" on clinics;
 drop policy if exists "Providers insert own clinics" on clinics;
 drop policy if exists "Providers update own clinics" on clinics;
@@ -137,24 +137,36 @@ create policy "Providers delete own clinics" on clinics for delete using (auth.u
 -- 7. DOCTORS TABLE
 create table if not exists doctors (
     id uuid default uuid_generate_v4() primary key,
-    clinic_id uuid references clinics(id) on delete cascade not null,
+    -- clinic_id removed per user instruction
     name_en text not null,
     name_ar text not null,
-    specialty_id bigint references specialties(id), -- Keeping for legacy
-    specialty_ids bigint[] default '{}', -- NEW COLUMN for multi-select
+    specialty_id bigint references specialties(id), 
+    specialty_ids bigint[] default '{}',
     bio text,
     photo_url text,
     created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- Doctors RLS
+-- Fix specialty_ids column if missing
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS specialty_ids bigint[] DEFAULT '{}';
+
+-- Add Phone
+ALTER TABLE doctors ADD COLUMN IF NOT EXISTS phone text;
+
 alter table doctors enable row level security;
+
 drop policy if exists "Doctors viewable by everyone" on doctors;
 drop policy if exists "Providers manage doctors" on doctors;
 
 create policy "Doctors viewable by everyone" on doctors for select using (true);
+
+-- Allow managing if you own the clinic linked via clinic_doctors
 create policy "Providers manage doctors" on doctors for all using (
-    exists (select 1 from clinics where id = doctors.clinic_id and owner_id = auth.uid())
+    exists (
+      select 1 from clinic_doctors cd 
+      join clinics c on cd.clinic_id = c.id 
+      where cd.doctor_id = doctors.id and c.owner_id = auth.uid()
+    )
 );
 
 
@@ -168,14 +180,19 @@ create table if not exists doctor_schedules (
     slot_duration int default 30
 );
 
--- Schedules RLS
 alter table doctor_schedules enable row level security;
+
 drop policy if exists "Schedules viewable by everyone" on doctor_schedules;
 drop policy if exists "Providers manage schedules" on doctor_schedules;
 
 create policy "Schedules viewable by everyone" on doctor_schedules for select using (true);
 create policy "Providers manage schedules" on doctor_schedules for all using (
-    exists (select 1 from doctors d join clinics c on d.clinic_id = c.id where d.id = doctor_schedules.doctor_id and c.owner_id = auth.uid())
+    exists (
+        select 1 from doctors d 
+        left join clinic_doctors cd on d.id = cd.doctor_id
+        join clinics c on cd.clinic_id = c.id
+        where d.id = doctor_schedules.doctor_id and c.owner_id = auth.uid()
+    )
 );
 
 
@@ -191,8 +208,13 @@ create table if not exists pharmacies (
   city_id bigint references cities(id)
 );
 
--- Pharmacies RLS
+-- ADD LOCATION COLUMNS TO PHARMACIES
+alter table pharmacies add column if not exists neighborhood text;
+alter table pharmacies add column if not exists latitude double precision;
+alter table pharmacies add column if not exists longitude double precision;
+
 alter table pharmacies enable row level security;
+
 drop policy if exists "Pharmacies viewable by everyone" on pharmacies;
 drop policy if exists "Providers manage pharmacies" on pharmacies;
 
@@ -212,8 +234,8 @@ create table if not exists bookings (
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- Bookings RLS
 alter table bookings enable row level security;
+
 drop policy if exists "View own bookings" on bookings;
 drop policy if exists "Patients insert bookings" on bookings;
 drop policy if exists "Update bookings" on bookings;
@@ -254,19 +276,18 @@ CREATE TABLE IF NOT EXISTS page_views (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
 
--- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_page_views_created_at ON page_views USING BTREE (created_at);
 CREATE INDEX IF NOT EXISTS idx_page_views_session ON page_views USING BTREE (session_id);
 
--- RLS for Analytics
 ALTER TABLE page_views ENABLE ROW LEVEL SECURITY;
 
--- Allow anyone to insert (track stats)
+drop policy if exists "Allow public insert to analytics" on page_views;
+drop policy if exists "Allow admins to view analytics" on page_views;
+
 CREATE POLICY "Allow public insert to analytics" 
 ON page_views FOR INSERT 
 WITH CHECK (true);
 
--- Allow only admins to read stats
 CREATE POLICY "Allow admins to view analytics" 
 ON page_views FOR SELECT 
 USING (
@@ -280,26 +301,25 @@ USING (
 
 CREATE TABLE IF NOT EXISTS reviews (
   id uuid default uuid_generate_v4() primary key,
-  entity_id uuid not null, -- Can link to clinic OR pharmacy
-  entity_type text not null, -- 'CLINIC' or 'PHARMACY'
+  entity_id uuid not null,
+  entity_type text not null,
   user_id uuid references profiles(id) on delete cascade not null,
   rating int not null check (rating >= 1 and rating <= 5),
   comment text,
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- Reviews RLS
 alter table reviews enable row level security;
 
--- Everyone can read reviews
+drop policy if exists "Reviews viewable by everyone" on reviews;
+drop policy if exists "Users can insert own reviews" on reviews;
+
 create policy "Reviews viewable by everyone" 
 on reviews for select using (true);
 
--- Authenticated users can write reviews
 create policy "Users can insert own reviews" 
 on reviews for insert with check (auth.uid() = user_id);
 
--- Create index for faster lookups
 create index if not exists idx_reviews_entity on reviews(entity_id);
 
 
@@ -313,8 +333,6 @@ CREATE TABLE IF NOT EXISTS conversations (
   participant_2 uuid references profiles(id) not null,
   last_message_at timestamp with time zone default timezone('utc'::text, now()),
   updated_at timestamp with time zone default timezone('utc'::text, now()),
-  -- Constraint to ensure unique conversation pairs (A, B) is same as (B, A) logic handled in query or dual check
-  -- For simplicity in RLS, we just ensure no duplicate rows for exact p1, p2 combo
   unique(participant_1, participant_2)
 );
 
@@ -327,11 +345,15 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- Messaging RLS
 alter table conversations enable row level security;
 alter table messages enable row level security;
 
--- Conversations: Users can see conversations they are part of
+drop policy if exists "Users view own conversations" on conversations;
+drop policy if exists "Users create conversations" on conversations;
+drop policy if exists "Users view messages in own conversations" on messages;
+drop policy if exists "Users send messages" on messages;
+drop policy if exists "Users update read status" on messages;
+
 create policy "Users view own conversations"
 on conversations for select
 using (auth.uid() = participant_1 or auth.uid() = participant_2);
@@ -340,7 +362,6 @@ create policy "Users create conversations"
 on conversations for insert
 with check (auth.uid() = participant_1 or auth.uid() = participant_2);
 
--- Messages: Users can see messages in their conversations
 create policy "Users view messages in own conversations"
 on messages for select
 using (
@@ -365,10 +386,24 @@ using (
   )
 );
 
+-- =============================================================================
+-- 14. CLINIC DOCTORS (Many-to-Many)
+-- =============================================================================
 
--- =============================================================================
--- MIGRATION: RUN THIS TO FIX 'specialty_ids' COLUMN MISSING ERROR
--- =============================================================================
--- Run this in the Supabase SQL Editor
-ALTER TABLE doctors 
-ADD COLUMN IF NOT EXISTS specialty_ids bigint[] DEFAULT '{}';
+create table if not exists clinic_doctors (
+  id uuid default uuid_generate_v4() primary key,
+  clinic_id uuid references clinics(id) on delete cascade not null,
+  doctor_id uuid references doctors(id) on delete cascade not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()),
+  unique(clinic_id, doctor_id)
+);
+
+alter table clinic_doctors enable row level security;
+
+drop policy if exists "Public view clinic_doctors" on clinic_doctors;
+drop policy if exists "Providers manage clinic_doctors" on clinic_doctors;
+
+create policy "Public view clinic_doctors" on clinic_doctors for select using (true);
+create policy "Providers manage clinic_doctors" on clinic_doctors for all using (
+    exists (select 1 from clinics where id = clinic_doctors.clinic_id and owner_id = auth.uid())
+);
