@@ -1,6 +1,6 @@
 
 import React, { useEffect, Suspense } from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { useStore } from './store';
 import { Role } from './types';
@@ -22,14 +22,14 @@ const RegisterFacility = React.lazy(() => import('./pages/RegisterFacility').the
 const Messages = React.lazy(() => import('./pages/Messages').then(module => ({ default: module.Messages })));
 
 // Protected Route Component
-const ProtectedRoute: React.FC<{ 
-  children: React.ReactNode, 
-  allowedRoles?: Role[] 
+const ProtectedRoute: React.FC<{
+  children: React.ReactNode,
+  allowedRoles?: Role[]
 }> = ({ children, allowedRoles }) => {
   const { user, isAuthenticated, isLoading } = useStore();
 
   if (isLoading) {
-      return <div className="flex h-screen items-center justify-center"><Spinner /></div>;
+    return <div className="flex h-screen items-center justify-center"><Spinner /></div>;
   }
 
   if (!isAuthenticated || !user) {
@@ -64,7 +64,7 @@ const App: React.FC = () => {
   }, [lang, theme]);
 
   return (
-    <HashRouter>
+    <BrowserRouter>
       <RouteHandler />
       <Layout>
         {/* Suspense shows a loading indicator while the specific page chunk is downloading */}
@@ -74,36 +74,36 @@ const App: React.FC = () => {
             <Route path="/" element={<Home />} />
             <Route path="/clinics" element={<Clinics />} />
             <Route path="/pharmacies" element={<Pharmacies />} />
-            
+
             {/* Details Routes */}
             <Route path="/directory/:id" element={<Details />} />
             <Route path="/clinic/:id" element={<Details />} />
             <Route path="/pharmacy/:id" element={<Details />} />
-            
+
             <Route path="/auth" element={<Auth />} />
 
             {/* Protected Routes */}
             <Route path="/messages" element={
-               <ProtectedRoute>
-                  <Messages />
-               </ProtectedRoute>
+              <ProtectedRoute>
+                <Messages />
+              </ProtectedRoute>
             } />
             <Route path="/appointments" element={
-               <ProtectedRoute>
-                  <Appointments />
-               </ProtectedRoute>
+              <ProtectedRoute>
+                <Appointments />
+              </ProtectedRoute>
             } />
             <Route path="/settings" element={
-               <ProtectedRoute>
-                  <Settings />
-               </ProtectedRoute>
+              <ProtectedRoute>
+                <Settings />
+              </ProtectedRoute>
             } />
 
             {/* Registration Page */}
             <Route path="/register-facility" element={
-               <ProtectedRoute allowedRoles={[Role.PATIENT]}>
-                  <RegisterFacility />
-               </ProtectedRoute>
+              <ProtectedRoute allowedRoles={[Role.PATIENT]}>
+                <RegisterFacility />
+              </ProtectedRoute>
             } />
 
             {/* Admin Routes */}
@@ -125,7 +125,7 @@ const App: React.FC = () => {
           </Routes>
         </Suspense>
       </Layout>
-    </HashRouter>
+    </BrowserRouter>
   );
 };
 
